@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: >
-  SAM app: S3 uploads → Lambda thumbnail → thumbnails in same bucket → DynamoDB metadata
+  SAM app: existing S3 bucket (aaqib-thumbnail-upload-bucket) -> Lambda thumbnail -> DynamoDB metadata
 
 Globals:
   Function:
@@ -15,15 +15,14 @@ Globals:
         THUMBNAIL_SIZE: "200"
         THUMBNAIL_FORMAT: "JPEG"
 
+Parameters:
+  UploadBucketName:
+    Type: String
+    Default: "aaqib-thumbnail-upload-bucket"
+    Description: "Existing S3 bucket name for uploads"
+
 Resources:
 
-  ## S3 bucket for uploads
-  UploadBucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      BucketName: !Sub "${AWS::StackName}-uploads-${AWS::Region}-${AWS::AccountId}"
-
-  ## DynamoDB table for metadata
   ImageUploadsTable:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -40,7 +39,6 @@ Resources:
           KeyType: RANGE
       BillingMode: PAY_PER_REQUEST
 
-  ## Pillow layer
   PillowLayer:
     Type: AWS::Serverless::LayerVersion
     Properties:
@@ -50,7 +48,6 @@ Resources:
       CompatibleRuntimes:
         - python3.11
 
-  ## Lambda function (triggered on S3 uploads)
   ThumbnailFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -59,53 +56,22 @@ Resources:
       CodeUri: ./src
       Layers:
         - !Ref PillowLayer
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - AmazonS3FullAccess
+        - AmazonDynamoDBFullAccess
       Environment:
         Variables:
-          BUCKET_NAME: !Ref UploadBucket
-      Events:
-        S3UploadEvent:
-          Type: S3
-          Properties:
-            Bucket: !Ref UploadBucket
-            Events: s3:ObjectCreated:*
-            Filter:
-              S3Key:
-                Rules:
-                  - Name: prefix
-                    Value: uploads/
-
-  ## IAM policy attached to Lambda role (grants S3 + DynamoDB access)
-  ThumbnailFunctionPolicy:
-    Type: AWS::IAM::Policy
-    Properties:
-      PolicyName: !Sub "${AWS::StackName}-ThumbnailPolicy"
-      Roles:
-        - !Ref ThumbnailFunctionRole
-      PolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Action:
-              - s3:GetObject
-              - s3:PutObject
-            Resource:
-              - !Sub "arn:aws:s3:::${UploadBucket}"
-              - !Sub "arn:aws:s3:::${UploadBucket}/*"
-          - Effect: Allow
-            Action:
-              - dynamodb:PutItem
-              - dynamodb:UpdateItem
-            Resource: !GetAtt ImageUploadsTable.Arn
+          BUCKET_NAME: !Ref UploadBucketName
+          DDB_TABLE: !Ref ImageUploadsTable
+          THUMBNAIL_PREFIX: "thumbnails/"
+          THUMBNAIL_SIZE: "200"
+          THUMBNAIL_FORMAT: "JPEG"
 
 Outputs:
   UploadBucketName:
-    Description: "S3 bucket for uploads"
-    Value: !Ref UploadBucket
-
+    Value: !Ref UploadBucketName
   ThumbnailFunctionName:
-    Description: "Lambda function name"
     Value: !Ref ThumbnailFunction
-
   ImageUploadsTableName:
-    Description: "DynamoDB table name"
     Value: !Ref ImageUploadsTable
