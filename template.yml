@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: >
-  SAM app: S3 uploads -> Lambda thumbnail -> thumbnails in same bucket -> DynamoDB metadata
+  SAM app: S3 uploads → Lambda thumbnail → thumbnails in same bucket → DynamoDB metadata
 
 Globals:
   Function:
@@ -17,11 +17,13 @@ Globals:
 
 Resources:
 
+  ## S3 bucket for uploads
   UploadBucket:
     Type: AWS::S3::Bucket
     Properties:
       BucketName: !Sub "${AWS::StackName}-uploads-${AWS::Region}-${AWS::AccountId}"
 
+  ## DynamoDB table for metadata
   ImageUploadsTable:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -38,15 +40,17 @@ Resources:
           KeyType: RANGE
       BillingMode: PAY_PER_REQUEST
 
+  ## Pillow layer
   PillowLayer:
     Type: AWS::Serverless::LayerVersion
     Properties:
       LayerName: !Sub "${AWS::StackName}-PillowLayer"
-      Description: "Pillow for image processing (built for Lambda)"
+      Description: Pillow layer for image processing
       ContentUri: ./layer
       CompatibleRuntimes:
         - python3.11
 
+  ## Lambda function (triggered on S3 uploads)
   ThumbnailFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -55,23 +59,6 @@ Resources:
       CodeUri: ./src
       Layers:
         - !Ref PillowLayer
-      Policies:
-        - PolicyName: ThumbnailS3DDBPolicy
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action:
-                  - s3:GetObject
-                  - s3:PutObject
-                Resource:
-                  - !GetAtt UploadBucket.Arn
-                  - !Sub "${UploadBucket.Arn}/*"
-              - Effect: Allow
-                Action:
-                  - dynamodb:PutItem
-                  - dynamodb:UpdateItem
-                Resource: !GetAtt ImageUploadsTable.Arn
       Environment:
         Variables:
           BUCKET_NAME: !Ref UploadBucket
@@ -86,6 +73,29 @@ Resources:
                 Rules:
                   - Name: prefix
                     Value: uploads/
+
+  ## IAM policy attached to Lambda role (grants S3 + DynamoDB access)
+  ThumbnailFunctionPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub "${AWS::StackName}-ThumbnailPolicy"
+      Roles:
+        - !Ref ThumbnailFunctionRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+            Resource:
+              - !Sub "arn:aws:s3:::${UploadBucket}"
+              - !Sub "arn:aws:s3:::${UploadBucket}/*"
+          - Effect: Allow
+            Action:
+              - dynamodb:PutItem
+              - dynamodb:UpdateItem
+            Resource: !GetAtt ImageUploadsTable.Arn
 
 Outputs:
   UploadBucketName:
