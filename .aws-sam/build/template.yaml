@@ -1,0 +1,111 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 'SAM app: S3 uploads -> Lambda thumbnail -> thumbnails in same bucket
+  -> DynamoDB metadata
+
+  '
+Globals:
+  Function:
+    Runtime: python3.11
+    Timeout: 30
+    MemorySize: 512
+    Environment:
+      Variables:
+        DDB_TABLE:
+          Ref: ImageUploadsTable
+        THUMBNAIL_PREFIX: thumbnails/
+        THUMBNAIL_SIZE: '200'
+        THUMBNAIL_FORMAT: JPEG
+Resources:
+  UploadBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName:
+        Fn::Sub: ${AWS::StackName}-uploads-${AWS::Region}-${AWS::AccountId}
+  ImageUploadsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName:
+        Fn::Sub: ${AWS::StackName}-ImageUploads
+      AttributeDefinitions:
+      - AttributeName: pk
+        AttributeType: S
+      - AttributeName: sk
+        AttributeType: S
+      KeySchema:
+      - AttributeName: pk
+        KeyType: HASH
+      - AttributeName: sk
+        KeyType: RANGE
+      BillingMode: PAY_PER_REQUEST
+  PillowLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName:
+        Fn::Sub: ${AWS::StackName}-PillowLayer
+      Description: Pillow for image processing (built for Lambda)
+      ContentUri: ../../layer
+      CompatibleRuntimes:
+      - python3.11
+  ThumbnailFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName:
+        Fn::Sub: ${AWS::StackName}-ThumbnailFunction
+      Handler: lambda_function.lambda_handler
+      CodeUri: ThumbnailFunction
+      Layers:
+      - Ref: PillowLayer
+      Policies:
+      - PolicyName: ThumbnailS3DDBPolicy
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - s3:GetObject
+            - s3:PutObject
+            Resource:
+            - Fn::GetAtt:
+              - UploadBucket
+              - Arn
+            - Fn::Sub: ${UploadBucket.Arn}/*
+          - Effect: Allow
+            Action:
+            - dynamodb:PutItem
+            - dynamodb:UpdateItem
+            Resource:
+              Fn::GetAtt:
+              - ImageUploadsTable
+              - Arn
+      Environment:
+        Variables:
+          BUCKET_NAME:
+            Ref: UploadBucket
+      Events:
+        S3UploadEvent:
+          Type: S3
+          Properties:
+            Bucket:
+              Ref: UploadBucket
+            Events: s3:ObjectCreated:*
+            Filter:
+              S3Key:
+                Rules:
+                - Name: prefix
+                  Value: uploads/
+    Metadata:
+      SamResourceId: ThumbnailFunction
+Outputs:
+  UploadBucketName:
+    Description: S3 bucket for uploads
+    Value:
+      Ref: UploadBucket
+  ThumbnailFunctionName:
+    Description: Lambda function name
+    Value:
+      Ref: ThumbnailFunction
+  ImageUploadsTableName:
+    Description: DynamoDB table name
+    Value:
+      Ref: ImageUploadsTable
